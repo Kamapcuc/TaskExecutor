@@ -1,4 +1,6 @@
 import example.TaskExecutor;
+import javafx.util.Pair;
+import org.joda.time.DateTime;
 
 import java.util.Date;
 import java.util.concurrent.Callable;
@@ -8,9 +10,7 @@ public class Main {
     public static void main(String... args) throws Exception {
         TaskExecutor taskExecutor = new TaskExecutor();
         taskExecutor.start();
-        Callable<Double> x = Main::computePi;
-        Date z = null;
-        System.out.println(x.call());
+        taskExecutor.accept(new Pair<>(new DateTime(), Main::computePi));
     }
 
     public static double computePi() {

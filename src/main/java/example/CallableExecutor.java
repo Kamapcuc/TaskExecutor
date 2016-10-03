@@ -12,8 +12,8 @@ public class CallableExecutor extends Thread {
 
     private final Supplier<Callable> supplier;
 
-    public CallableExecutor(String threadName, Supplier<Callable> supplier) {
-        super(threadName);
+    public CallableExecutor(String name, Supplier<Callable> supplier) {
+        super(name);
         this.supplier = supplier;
     }
 

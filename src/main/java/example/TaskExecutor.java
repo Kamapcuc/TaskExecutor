@@ -2,21 +2,24 @@ package example;
 
 import javafx.util.Pair;
 import org.apache.log4j.Logger;
+import org.joda.time.DateTime;
 
 import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentNavigableMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
-public class TaskExecutor extends Thread implements Consumer<Pair<Date, Callable>>, Supplier<Callable> {
+public class TaskExecutor extends Thread implements Consumer<Pair<DateTime, Callable>>, Supplier<Callable> {
 
     private static final Logger logger = Logger.getLogger(TaskExecutor.class);
     private static final Date BEGINNING_OF_TIME = new Date(0);
     private static final Date INFINITE_FUTURE = new Date(Long.MAX_VALUE);
     private static final byte THREAD_POOL_SIZE = 4;
 
-    private volatile SortedMap<Date, Callable> waitingRoom = new TreeMap<>();
+    private ConcurrentNavigableMap<Date, Callable> waitingRoom = new ConcurrentSkipListMap<>();
 
     private final Queue<Callable> executeQueue = new ConcurrentLinkedQueue<>();
 
@@ -35,17 +38,20 @@ public class TaskExecutor extends Thread implements Consumer<Pair<Date, Callable
     }
 
     @Override
+    @SuppressWarnings("InfiniteLoopStatement")
     public void run() {
-        long now = System.currentTimeMillis();
-        Date today = new Date(System.currentTimeMillis());
-        SortedMap<Date, Callable> past = waitingRoom.subMap(BEGINNING_OF_TIME, today);
-        SortedMap<Date, Callable> future = waitingRoom.subMap(today, INFINITE_FUTURE);
-        waitingRoom = future;
-        past.values().forEach(executeQueue::offer);
-        try {
-            Thread.sleep(future.firstKey().getTime() - now);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
+        while (true) {
+            long now = System.currentTimeMillis();
+            Date today = new Date(System.currentTimeMillis());
+            ConcurrentNavigableMap<Date, Callable> past = waitingRoom.subMap(BEGINNING_OF_TIME, today);
+            ConcurrentNavigableMap<Date, Callable> future = waitingRoom.subMap(today, INFINITE_FUTURE);
+            waitingRoom = future;
+            past.values().forEach(executeQueue::offer);
+            try {
+                sleep(future.firstKey().getTime() - now);
+            } catch (InterruptedException e) {
+                logger.info("wake up");
+            }
         }
     }
 
@@ -56,11 +62,16 @@ public class TaskExecutor extends Thread implements Consumer<Pair<Date, Callable
     }
 
     @Override
-    public void accept(Pair<Date, Callable> task) {
-        synchronized (this) {
-            if (executeQueue.size() > threadPool.size())
-                logger.warn("Overload detected");
-            waitingRoom.put(task.getKey(), task.getValue());
+    public void accept(Pair<DateTime, Callable> task) {
+        if (executeQueue.size() > threadPool.size())
+            logger.warn("Overload detected");
+        Date date = new Date(task.getKey().getMillis());
+        if (date.getTime() > System.currentTimeMillis()) {
+            executeQueue.offer(task.getValue());
+        } else {
+            waitingRoom.put(date, task.getValue());
+            if (date.compareTo(waitingRoom.firstKey()) < 0)
+                interrupt();
         }
     }
 
