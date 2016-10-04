@@ -10,7 +10,7 @@ public class Main {
     public static void main(String... args) throws Exception {
         TaskExecutor taskExecutor = new TaskExecutor();
         taskExecutor.start();
-        taskExecutor.accept(new Pair<>(new DateTime(), Main::computePi));
+        taskExecutor.accept(new DateTime(), Main::computePi);
     }
 
     public static double computePi() {

@@ -1,28 +1,21 @@
 package example;
 
-import javafx.util.Pair;
 import org.apache.log4j.Logger;
 import org.joda.time.DateTime;
 
+import java.lang.reflect.Array;
 import java.util.*;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ConcurrentNavigableMap;
-import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.function.Consumer;
+import java.util.concurrent.*;
+import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
-public class TaskExecutor extends Thread implements Consumer<Pair<DateTime, Callable>>, Supplier<Callable> {
+public class TaskExecutor extends Thread implements BiConsumer<DateTime, Callable>, Supplier<Callable> {
 
     private static final Logger logger = Logger.getLogger(TaskExecutor.class);
-    private static final Date BEGINNING_OF_TIME = new Date(0);
-    private static final Date INFINITE_FUTURE = new Date(Long.MAX_VALUE);
     private static final byte THREAD_POOL_SIZE = 4;
 
-    private ConcurrentNavigableMap<Date, Callable> waitingRoom = new ConcurrentSkipListMap<>();
-
+    private final ConcurrentNavigableMap<Long, List<Callable>> waitingRoom = new ConcurrentSkipListMap<>();
     private final Queue<Callable> executeQueue = new ConcurrentLinkedQueue<>();
-
     private final Collection<Thread> threadPool;
 
     public TaskExecutor() {
@@ -38,46 +31,63 @@ public class TaskExecutor extends Thread implements Consumer<Pair<DateTime, Call
     }
 
     @Override
-    @SuppressWarnings("InfiniteLoopStatement")
-    public void run() {
-        while (true) {
-            long now = System.currentTimeMillis();
-            Date today = new Date(System.currentTimeMillis());
-            ConcurrentNavigableMap<Date, Callable> past = waitingRoom.subMap(BEGINNING_OF_TIME, today);
-            ConcurrentNavigableMap<Date, Callable> future = waitingRoom.subMap(today, INFINITE_FUTURE);
-            waitingRoom = future;
-            past.values().forEach(executeQueue::offer);
-            try {
-                sleep(future.firstKey().getTime() - now);
-            } catch (InterruptedException e) {
-                logger.info("wake up");
-            }
-        }
-    }
-
-    @Override
     public synchronized void start() {
         this.threadPool.forEach(Thread::start);
         super.start();
     }
 
     @Override
-    public void accept(Pair<DateTime, Callable> task) {
-        if (executeQueue.size() > threadPool.size())
-            logger.warn("Overload detected");
-        Date date = new Date(task.getKey().getMillis());
-        if (date.getTime() > System.currentTimeMillis()) {
-            executeQueue.offer(task.getValue());
-        } else {
-            waitingRoom.put(date, task.getValue());
-            if (date.compareTo(waitingRoom.firstKey()) < 0)
-                interrupt();
+    @SuppressWarnings("InfiniteLoopStatement")
+    public void run() {
+        while (true) {
+            long timeToNextEvent = waitingRoom.firstKey() - System.currentTimeMillis();
+            if (timeToNextEvent <= 0) {
+                Map.Entry<Long, List<Callable>> firstEntry = waitingRoom.pollFirstEntry();
+                synchronized (this) {
+                    firstEntry.getValue().forEach(executeQueue::offer);
+                }
+            } else {
+                try {
+                    sleep(timeToNextEvent);
+                } catch (InterruptedException e) {
+                    logger.info("woke up");
+                }
+            }
         }
     }
 
     @Override
     public Callable get() {
         return executeQueue.poll();
+    }
+
+    private void toWaitingRoom(long time, Callable callable) {
+        List<Callable> container = Collections.synchronizedList(Arrays.asList(callable));
+        List<Callable> putByOtherThread = waitingRoom.putIfAbsent(time, container);
+        if (putByOtherThread != null) {
+            synchronized (this) {
+                putByOtherThread.add(callable);
+                if (!waitingRoom.containsKey(time))
+                    waitingRoom.put(time, container);
+            }
+        }
+    }
+
+    @Override
+    public void accept(DateTime dateTime, Callable callable) {
+        if (executeQueue.size() > threadPool.size())
+            logger.warn("Overload detected");
+        accept(dateTime.getMillis(), callable);
+    }
+
+    private void accept(long time, Callable callable) {
+        if (time > System.currentTimeMillis()) {
+            executeQueue.offer(callable);
+        } else {
+            toWaitingRoom(time, callable);
+            if (time < waitingRoom.firstKey() && getState() == Thread.State.TIMED_WAITING)
+                interrupt();
+        }
     }
 
 }

@@ -39,7 +39,7 @@ public class CallableExecutor extends Thread {
 
     private void haveRest() {
         try {
-            sleep((long) (Math.random() * TimeUnit.SECONDS.toMillis(5)));
+            sleep((long) (Math.random() * TimeUnit.SECONDS.toMillis(1)));
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
