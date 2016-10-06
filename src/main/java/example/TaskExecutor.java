@@ -3,9 +3,11 @@ package example;
 import org.apache.log4j.Logger;
 import org.joda.time.DateTime;
 
-import java.lang.reflect.Array;
 import java.util.*;
-import java.util.concurrent.*;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentNavigableMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
@@ -43,14 +45,12 @@ public class TaskExecutor extends Thread implements BiConsumer<DateTime, Callabl
             long timeToNextEvent = waitingRoom.firstKey() - System.currentTimeMillis();
             if (timeToNextEvent <= 0) {
                 Map.Entry<Long, List<Callable>> firstEntry = waitingRoom.pollFirstEntry();
-                synchronized (this) {
-                    firstEntry.getValue().forEach(executeQueue::offer);
-                }
+                firstEntry.getValue().forEach(executeQueue::offer);
             } else {
                 try {
                     sleep(timeToNextEvent);
                 } catch (InterruptedException e) {
-                    logger.info("woke up");
+                    logger.info("new firstKey");
                 }
             }
         }
@@ -64,13 +64,11 @@ public class TaskExecutor extends Thread implements BiConsumer<DateTime, Callabl
     private void toWaitingRoom(long time, Callable callable) {
         List<Callable> container = Collections.synchronizedList(Arrays.asList(callable));
         List<Callable> putByOtherThread = waitingRoom.putIfAbsent(time, container);
-        if (putByOtherThread != null) {
-            synchronized (this) {
-                putByOtherThread.add(callable);
-                if (!waitingRoom.containsKey(time))
-                    waitingRoom.put(time, container);
-            }
-        }
+        if (putByOtherThread != null)
+            container = putByOtherThread;
+        container.add(callable);
+        if (!waitingRoom.containsKey(time))
+            executeQueue.offer(callable);
     }
 
     @Override
