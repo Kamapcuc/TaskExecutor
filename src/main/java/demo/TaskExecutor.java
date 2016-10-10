@@ -1,25 +1,25 @@
-package example;
+package demo;
 
 import org.apache.log4j.Logger;
 import org.joda.time.DateTime;
 
-import java.util.*;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ConcurrentNavigableMap;
-import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Queue;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
-public class TaskExecutor extends Thread implements BiConsumer<DateTime, Callable>, Supplier<Callable> {
+public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Callable<T>, Future<T>>, Supplier<Runnable> {
 
     private final static AtomicLong sequence = new AtomicLong(Long.MIN_VALUE);
     private static final Logger logger = Logger.getLogger(TaskExecutor.class);
     private static final byte THREAD_POOL_SIZE = 4;
 
-    private final ConcurrentNavigableMap<TimeAndOrderKey, Callable> waitingRoom = new ConcurrentSkipListMap<>();
-    private final Queue<Callable> executeQueue = new ConcurrentLinkedQueue<>();
+    private final ConcurrentNavigableMap<TimeAndOrderKey, Runnable> waitingRoom = new ConcurrentSkipListMap<>();
+    private final Queue<Runnable> executeQueue = new ConcurrentLinkedQueue<>();
     private final Collection<Thread> threadPool;
 
     public TaskExecutor() {
@@ -30,7 +30,7 @@ public class TaskExecutor extends Thread implements BiConsumer<DateTime, Callabl
     private Collection<Thread> constructThreadPool() {
         Collection<Thread> threadPool = new ArrayList<>();
         for (int i = 0; i < THREAD_POOL_SIZE; i++)
-            threadPool.add(new CallableExecutor("executor-" + i, this));
+            threadPool.add(new InfiniteRunnableExecutor("executor-" + i, this));
         return Collections.unmodifiableCollection(threadPool);
     }
 
@@ -76,22 +76,24 @@ public class TaskExecutor extends Thread implements BiConsumer<DateTime, Callabl
     }
 
     @Override
-    public void accept(DateTime dateTime, Callable callable) {
+    public Future<T> apply(DateTime dateTime, Callable<T> callable) {
         if (executeQueue.size() > threadPool.size())
             logger.warn("Overload detected");
-        accept(dateTime.getMillis(), callable);
+        FutureTask<T> result = new FutureTask<>(callable);
+        accept(dateTime.getMillis(), result);
+        return result;
     }
 
-    private void accept(long time, Callable callable) {
+    private void accept(long time, Runnable runnable) {
         if (time < System.currentTimeMillis()) {
-            toExecuteQueue(callable);
+            toExecuteQueue(runnable);
         } else {
-            toWaitingRoom(time, callable);
+            toWaitingRoom(time, runnable);
         }
     }
 
-    private void toWaitingRoom(long time, Callable callable) {
-        waitingRoom.put(new TimeAndOrderKey(time), callable);
+    private void toWaitingRoom(long time, Runnable runnable) {
+        waitingRoom.put(new TimeAndOrderKey(time), runnable);
         if (time < waitingRoom.firstKey().startTime)
             interrupt();
         synchronized (waitingRoom) {
@@ -99,15 +101,15 @@ public class TaskExecutor extends Thread implements BiConsumer<DateTime, Callabl
         }
     }
 
-    private void toExecuteQueue(Callable callable) {
-        executeQueue.offer(callable);
+    private void toExecuteQueue(Runnable runnable) {
+        executeQueue.offer(runnable);
         synchronized (this) {
             notifyAll();
         }
     }
 
     @Override
-    public Callable get() {
+    public Runnable get() {
         return executeQueue.poll();
     }
 
