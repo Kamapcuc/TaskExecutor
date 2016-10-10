@@ -3,7 +3,6 @@ package example;
 import org.apache.log4j.Logger;
 
 import java.util.concurrent.Callable;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 public class CallableExecutor extends Thread {
@@ -22,10 +21,10 @@ public class CallableExecutor extends Thread {
     public void run() {
         while (true) {
             Callable target = supplier.get();
-            if (target != null) {
+            if (target != null)
                 execute(target);
-            } else
-                haveRest();
+            else
+                waitForNextTask();
         }
     }
 
@@ -37,9 +36,11 @@ public class CallableExecutor extends Thread {
         }
     }
 
-    private void haveRest() {
+    private void waitForNextTask() {
         try {
-            sleep((long) (Math.random() * TimeUnit.SECONDS.toMillis(1)));
+            synchronized (supplier) {
+                supplier.wait();
+            }
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }

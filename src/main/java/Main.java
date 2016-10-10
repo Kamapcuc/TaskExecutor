@@ -1,9 +1,9 @@
 import example.TaskExecutor;
-import javafx.util.Pair;
 import org.joda.time.DateTime;
 
-import java.util.Date;
-import java.util.concurrent.Callable;
+import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 
 public class Main {
 
@@ -11,6 +11,10 @@ public class Main {
         TaskExecutor taskExecutor = new TaskExecutor();
         taskExecutor.start();
         taskExecutor.accept(new DateTime(), Main::computePi);
+
+        ScheduledExecutorService d;
+        ScheduledThreadPoolExecutor s;
+        PriorityBlockingQueue x = new PriorityBlockingQueue<>();
     }
 
     public static double computePi() {

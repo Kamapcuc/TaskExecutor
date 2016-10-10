@@ -8,15 +8,17 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
 public class TaskExecutor extends Thread implements BiConsumer<DateTime, Callable>, Supplier<Callable> {
 
+    private final static AtomicLong sequence = new AtomicLong(Long.MIN_VALUE);
     private static final Logger logger = Logger.getLogger(TaskExecutor.class);
     private static final byte THREAD_POOL_SIZE = 4;
 
-    private final ConcurrentNavigableMap<Long, List<Callable>> waitingRoom = new ConcurrentSkipListMap<>();
+    private final ConcurrentNavigableMap<TimeAndOrderKey, Callable> waitingRoom = new ConcurrentSkipListMap<>();
     private final Queue<Callable> executeQueue = new ConcurrentLinkedQueue<>();
     private final Collection<Thread> threadPool;
 
@@ -42,33 +44,35 @@ public class TaskExecutor extends Thread implements BiConsumer<DateTime, Callabl
     @SuppressWarnings("InfiniteLoopStatement")
     public void run() {
         while (true) {
-            long timeToNextEvent = waitingRoom.firstKey() - System.currentTimeMillis();
-            if (timeToNextEvent <= 0) {
-                Map.Entry<Long, List<Callable>> firstEntry = waitingRoom.pollFirstEntry();
-                firstEntry.getValue().forEach(executeQueue::offer);
+            TimeAndOrderKey firstKey = waitingRoom.firstKey();
+            if (firstKey != null) {
+                processNextTask(firstKey.startTime - System.currentTimeMillis());
             } else {
-                try {
-                    sleep(timeToNextEvent);
-                } catch (InterruptedException e) {
-                    logger.info("new firstKey");
-                }
+                waitForNextTask();
             }
         }
     }
 
-    @Override
-    public Callable get() {
-        return executeQueue.poll();
+    private void processNextTask(long timeToNextEvent) {
+        if (timeToNextEvent <= 0) {
+            toExecuteQueue(waitingRoom.pollFirstEntry().getValue());
+        } else {
+            try {
+                sleep(timeToNextEvent);
+            } catch (InterruptedException e) {
+                logger.info("new firstKey");
+            }
+        }
     }
 
-    private void toWaitingRoom(long time, Callable callable) {
-        List<Callable> container = Collections.synchronizedList(Arrays.asList(callable));
-        List<Callable> putByOtherThread = waitingRoom.putIfAbsent(time, container);
-        if (putByOtherThread != null)
-            container = putByOtherThread;
-        container.add(callable);
-        if (!waitingRoom.containsKey(time))
-            executeQueue.offer(callable);
+    private void waitForNextTask() {
+        try {
+            synchronized (waitingRoom) {
+                waitingRoom.wait();
+            }
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
@@ -79,13 +83,53 @@ public class TaskExecutor extends Thread implements BiConsumer<DateTime, Callabl
     }
 
     private void accept(long time, Callable callable) {
-        if (time > System.currentTimeMillis()) {
-            executeQueue.offer(callable);
+        if (time < System.currentTimeMillis()) {
+            toExecuteQueue(callable);
         } else {
             toWaitingRoom(time, callable);
-            if (time < waitingRoom.firstKey() && getState() == Thread.State.TIMED_WAITING)
-                interrupt();
         }
+    }
+
+    private void toWaitingRoom(long time, Callable callable) {
+        waitingRoom.put(new TimeAndOrderKey(time), callable);
+        if (time < waitingRoom.firstKey().startTime)
+            interrupt();
+        synchronized (waitingRoom) {
+            waitingRoom.notify();
+        }
+    }
+
+    private void toExecuteQueue(Callable callable) {
+        executeQueue.offer(callable);
+        synchronized (this) {
+            notifyAll();
+        }
+    }
+
+    @Override
+    public Callable get() {
+        return executeQueue.poll();
+    }
+
+    private class TimeAndOrderKey implements Comparable<TimeAndOrderKey> {
+
+        private final long startTime;
+        private final long order;
+
+        private TimeAndOrderKey(long startTime) {
+            this.startTime = startTime;
+            this.order = sequence.incrementAndGet();
+        }
+
+        @Override
+        public int compareTo(TimeAndOrderKey o) {
+            long diff = startTime - o.startTime;
+            if (diff != 0)
+                return Long.signum(diff);
+            else
+                return Long.signum(order - o.order);
+        }
+
     }
 
 }
