@@ -1,44 +1,20 @@
-package example;
+package demo;
 
 import org.apache.log4j.Logger;
 import org.joda.time.DateTime;
 
-import java.util.*;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ConcurrentNavigableMap;
-import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.BiConsumer;
-import java.util.function.Supplier;
+import java.util.function.BiFunction;
 
-public class TaskExecutor extends Thread implements BiConsumer<DateTime, Callable>, Supplier<Callable> {
+public class TaskExecutor extends Thread implements BiFunction<DateTime, Callable<Object>, Future> {
 
     private final static AtomicLong sequence = new AtomicLong(Long.MIN_VALUE);
     private static final Logger logger = Logger.getLogger(TaskExecutor.class);
     private static final byte THREAD_POOL_SIZE = 4;
 
-    private final ConcurrentNavigableMap<TimeAndOrderKey, Callable> waitingRoom = new ConcurrentSkipListMap<>();
-    private final Queue<Callable> executeQueue = new ConcurrentLinkedQueue<>();
-    private final Collection<Thread> threadPool;
-
-    public TaskExecutor() {
-        super(new ThreadGroup("TaskExecutor"), "administrator");
-        threadPool = constructThreadPool();
-    }
-
-    private Collection<Thread> constructThreadPool() {
-        Collection<Thread> threadPool = new ArrayList<>();
-        for (int i = 0; i < THREAD_POOL_SIZE; i++)
-            threadPool.add(new CallableExecutor("executor-" + i, this));
-        return Collections.unmodifiableCollection(threadPool);
-    }
-
-    @Override
-    public synchronized void start() {
-        this.threadPool.forEach(Thread::start);
-        super.start();
-    }
+    private final ConcurrentNavigableMap<TimeAndOrderKey, Runnable> waitingRoom = new ConcurrentSkipListMap<>();
+    private final ExecutorService threadPool = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
 
     @Override
     @SuppressWarnings("InfiniteLoopStatement")
@@ -76,39 +52,32 @@ public class TaskExecutor extends Thread implements BiConsumer<DateTime, Callabl
     }
 
     @Override
-    public void accept(DateTime dateTime, Callable callable) {
-        if (executeQueue.size() > threadPool.size())
-            logger.warn("Overload detected");
-        accept(dateTime.getMillis(), callable);
+    public Future apply(DateTime dateTime, Callable<Object> callable) {
+        return accept(dateTime.getMillis(), callable);
     }
 
-    private void accept(long time, Callable callable) {
+    private Future accept(long time, Callable<Object> callable) {
         if (time < System.currentTimeMillis()) {
-            toExecuteQueue(callable);
+            return toExecuteQueue(new FutureTask<>(callable));
         } else {
-            toWaitingRoom(time, callable);
+            FutureTask x = new FutureTask<>(callable);
+            toWaitingRoom(time, x);
+            return x;
         }
     }
 
-    private void toWaitingRoom(long time, Callable callable) {
-        waitingRoom.put(new TimeAndOrderKey(time), callable);
+    private Future toWaitingRoom(long time, RunnableFuture runnable) {
+        waitingRoom.put(new TimeAndOrderKey(time), runnable);
         if (time < waitingRoom.firstKey().startTime)
             interrupt();
         synchronized (waitingRoom) {
             waitingRoom.notify();
         }
+        return runnable;
     }
 
-    private void toExecuteQueue(Callable callable) {
-        executeQueue.offer(callable);
-        synchronized (this) {
-            notifyAll();
-        }
-    }
-
-    @Override
-    public Callable get() {
-        return executeQueue.poll();
+    private Future toExecuteQueue(Runnable runnable) {
+        return threadPool.submit(runnable);
     }
 
     private class TimeAndOrderKey implements Comparable<TimeAndOrderKey> {

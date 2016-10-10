@@ -1,9 +1,7 @@
-import example.TaskExecutor;
+import demo.TaskExecutor;
 import org.joda.time.DateTime;
 
-import java.util.concurrent.PriorityBlockingQueue;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.*;
 
 public class Main {
 
@@ -14,7 +12,13 @@ public class Main {
 
         ScheduledExecutorService d;
         ScheduledThreadPoolExecutor s;
+        s.schedule();
         PriorityBlockingQueue x = new PriorityBlockingQueue<>();
+        ExecutorService z = Executors.newFixedThreadPool(10);
+//        z = new ThreadPoolExecutor(10, 10,
+//                0L, TimeUnit.MILLISECONDS,
+//                new LinkedBlockingQueue<>());
+        z.submit();
     }
 
     public static double computePi() {
