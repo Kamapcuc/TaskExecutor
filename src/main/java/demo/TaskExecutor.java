@@ -3,10 +3,7 @@ package demo;
 import org.apache.log4j.Logger;
 import org.joda.time.DateTime;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Queue;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
@@ -30,7 +27,7 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
     private Collection<Thread> constructThreadPool() {
         Collection<Thread> threadPool = new ArrayList<>();
         for (int i = 0; i < THREAD_POOL_SIZE; i++)
-            threadPool.add(new InfiniteRunnableExecutor("executor-" + i, this));
+            threadPool.add(new RunnableExecutor("executor-" + i, this));
         return Collections.unmodifiableCollection(threadPool);
     }
 
@@ -44,23 +41,24 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
     @SuppressWarnings("InfiniteLoopStatement")
     public void run() {
         while (true) {
-            TimeAndOrderKey firstKey = waitingRoom.firstKey();
-            if (firstKey != null) {
-                processNextTask(firstKey.startTime - System.currentTimeMillis());
-            } else {
+            if (waitingRoom.isEmpty()) {
                 waitForNextTask();
+            } else {
+                processNextTask();
             }
         }
     }
 
-    private void processNextTask(long timeToNextEvent) {
+    private void processNextTask() {
+        Map.Entry<TimeAndOrderKey, Runnable> firstEntry = waitingRoom.pollFirstEntry();
+        long timeToNextEvent = firstEntry.getKey().startTime - System.currentTimeMillis();
         if (timeToNextEvent <= 0) {
-            toExecuteQueue(waitingRoom.pollFirstEntry().getValue());
+            toExecuteQueue(firstEntry.getValue());
         } else {
             try {
                 sleep(timeToNextEvent);
             } catch (InterruptedException e) {
-                logger.info("new firstKey");
+                logger.info("Woke up - new first entry");
             }
         }
     }
@@ -94,8 +92,9 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
 
     private void toWaitingRoom(long time, Runnable runnable) {
         waitingRoom.put(new TimeAndOrderKey(time), runnable);
-        if (time < waitingRoom.firstKey().startTime)
+        if (time < waitingRoom.firstKey().startTime) {
             interrupt();
+        }
         synchronized (waitingRoom) {
             waitingRoom.notify();
         }
@@ -113,6 +112,12 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
         return executeQueue.poll();
     }
 
+    @Override
+    protected void finalize() throws Throwable {
+        threadPool.forEach(Thread::interrupt);
+        super.finalize();
+    }
+
     private class TimeAndOrderKey implements Comparable<TimeAndOrderKey> {
 
         private final long startTime;
@@ -120,7 +125,7 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
 
         private TimeAndOrderKey(long startTime) {
             this.startTime = startTime;
-            this.order = sequence.incrementAndGet();
+            this.order = sequence.getAndIncrement();
         }
 
         @Override
