@@ -23,6 +23,7 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
     private final Queue<Runnable> executeQueue = new ConcurrentLinkedQueue<>();
     private final Collection<Thread> threadPool = constructThreadPool();
     private final AtomicBoolean running = new AtomicBoolean(true);
+    private volatile long nextScheduledTime = Long.MAX_VALUE;
 
     private Collection<Thread> constructThreadPool() {
         Collection<Thread> threadPool = new ArrayList<>();
@@ -50,10 +51,10 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
 
     private void emptyWait() {
         logger.info("No tasks, waiting");
-        waitForTasks(null);
+        wait(null);
     }
 
-    private void waitForTasks(NotifyThread wakeUpThread) {
+    private void wait(NotifyThread wakeUpThread) {
         try {
             synchronized (running) {
                 if (wakeUpThread != null)
@@ -66,9 +67,10 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
     }
 
     private void waitForTasks(long delay) {
-        logger.info(String.format("Waiting %d ms for next task", delay));
+        nextScheduledTime = System.currentTimeMillis() + delay;
+        logger.info(String.format("Waiting %d ms for next task at %d", delay, nextScheduledTime));
         NotifyThread notifyThread = new NotifyThread(delay);
-        waitForTasks(notifyThread);
+        wait(notifyThread);
     }
 
     private void wakeUp() {
@@ -103,7 +105,8 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
 
     private void toWaitingRoom(long time, Runnable runnable) {
         waitingRoom.put(new TimeAndOrderKey(time), runnable);
-        wakeUp();
+        if (nextScheduledTime > time)
+            wakeUp();
         logger.info(String.format("Accepted task scheduled at %d", time));
     }
 
@@ -166,7 +169,7 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
                 logger.info(String.format("%d ms delay thread waked up", delay));
                 wakeUp();
             } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+                logger.warn(String.format("New firstKey - %d ms delay interrupted", delay));
             }
         }
 
