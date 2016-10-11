@@ -8,21 +8,20 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Queue;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
 public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Callable<T>, Future<T>>, Supplier<Runnable> {
 
-    private final static AtomicLong sequence = new AtomicLong(Long.MIN_VALUE);
-    private static final Logger logger = Logger.getLogger(TaskExecutor.class);
-    private static final byte THREAD_POOL_SIZE = 3;
+    private final static Logger logger = Logger.getLogger(TaskExecutor.class);
+    private final static byte THREAD_POOL_SIZE = 3;
 
     private final ConcurrentNavigableMap<TimeAndOrderKey, Runnable> waitingRoom = new ConcurrentSkipListMap<>();
     private final Queue<Runnable> executeQueue = new ConcurrentLinkedQueue<>();
     private final Collection<Thread> threadPool = constructThreadPool();
-    private final AtomicBoolean running = new AtomicBoolean(true);
+    private final Object monitor = new Object();
+    private volatile boolean running = true;
     private volatile long nextScheduledTime = Long.MAX_VALUE;
 
     private Collection<Thread> constructThreadPool() {
@@ -40,7 +39,7 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
 
     @Override
     public void run() {
-        while (running.get()) {
+        while (running) {
             if (waitingRoom.isEmpty()) {
                 emptyWait();
             } else {
@@ -54,12 +53,18 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
         wait(null);
     }
 
+    private void wakeUp() {
+        synchronized (monitor) {
+            monitor.notify();
+        }
+    }
+
     private void wait(NotifyThread wakeUpThread) {
         try {
-            synchronized (running) {
+            synchronized (monitor) {
                 if (wakeUpThread != null)
                     wakeUpThread.start();
-                running.wait();
+                monitor.wait();
             }
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
@@ -73,14 +78,8 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
         wait(notifyThread);
     }
 
-    private void wakeUp() {
-        synchronized (running) {
-            running.notify();
-        }
-    }
-
     private void processNextTask() {
-        long timeToNextEvent = waitingRoom.firstKey().startTime - System.currentTimeMillis();
+        long timeToNextEvent = waitingRoom.firstKey().getStartTime() - System.currentTimeMillis();
         if (timeToNextEvent > 0) {
             waitForTasks(timeToNextEvent);
         } else {
@@ -129,29 +128,8 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
     }
 
     public void safeStop() {
-        running.set(false);
+        running = false;
         wakeUp();
-    }
-
-    private class TimeAndOrderKey implements Comparable<TimeAndOrderKey> {
-
-        private final long startTime;
-        private final long order;
-
-        private TimeAndOrderKey(long startTime) {
-            this.startTime = startTime;
-            this.order = sequence.getAndIncrement();
-        }
-
-        @Override
-        public int compareTo(TimeAndOrderKey o) {
-            long diff = startTime - o.startTime;
-            if (diff != 0)
-                return Long.signum(diff);
-            else
-                return Long.signum(order - o.order);
-        }
-
     }
 
     private class NotifyThread extends Thread {
@@ -169,7 +147,7 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
                 logger.info(String.format("%d ms delay thread waked up", delay));
                 wakeUp();
             } catch (InterruptedException e) {
-                logger.warn(String.format("New firstKey - %d ms delay interrupted", delay));
+                throw new RuntimeException(e);
             }
         }
 
