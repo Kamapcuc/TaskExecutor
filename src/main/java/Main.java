@@ -12,6 +12,7 @@ public class Main {
         TaskExecutor<Double> taskExecutor = new TaskExecutor<>();
         taskExecutor.start();
         Future<Double> tt = taskExecutor.apply(new DateTime(), Main::computePi);
+        taskExecutor.safeStop();
         System.out.println(tt.get());
         ScheduledExecutorService d;
         ScheduledThreadPoolExecutor s;

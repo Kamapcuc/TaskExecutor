@@ -2,13 +2,14 @@ package demo;
 
 import java.util.function.Supplier;
 
-public class InfiniteRunnableExecutor extends Thread {
+public class RunnableExecutor extends Thread {
 
     private final Supplier<Runnable> supplier;
 
-    public InfiniteRunnableExecutor(String name, Supplier<Runnable> supplier) {
+    public RunnableExecutor(String name, Supplier<Runnable> runnableSupplier) {
         super(name);
-        this.supplier = supplier;
+        setDaemon(true);
+        this.supplier = runnableSupplier;
     }
 
     @Override
@@ -16,10 +17,11 @@ public class InfiniteRunnableExecutor extends Thread {
     public void run() {
         while (true) {
             Runnable target = supplier.get();
-            if (target != null)
+            if (target != null) {
                 target.run();
-            else
+            } else {
                 waitForNextTask();
+            }
         }
     }
 

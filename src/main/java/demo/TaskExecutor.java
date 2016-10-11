@@ -5,6 +5,7 @@ import org.joda.time.DateTime;
 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
@@ -13,16 +14,12 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
 
     private final static AtomicLong sequence = new AtomicLong(Long.MIN_VALUE);
     private static final Logger logger = Logger.getLogger(TaskExecutor.class);
-    private static final byte THREAD_POOL_SIZE = 4;
+    private static final byte THREAD_POOL_SIZE = 3;
 
     private final ConcurrentNavigableMap<TimeAndOrderKey, Runnable> waitingRoom = new ConcurrentSkipListMap<>();
     private final Queue<Runnable> executeQueue = new ConcurrentLinkedQueue<>();
-    private final Collection<Thread> threadPool;
-
-    public TaskExecutor() {
-        super(new ThreadGroup("TaskExecutor"), "administrator");
-        threadPool = constructThreadPool();
-    }
+    private final Collection<Thread> threadPool = constructThreadPool();
+    private final AtomicBoolean running = new AtomicBoolean(true);
 
     private Collection<Thread> constructThreadPool() {
         Collection<Thread> threadPool = new ArrayList<>();
@@ -40,46 +37,60 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
     @Override
     @SuppressWarnings("InfiniteLoopStatement")
     public void run() {
-        while (true) {
+        while (running.get()) {
             if (waitingRoom.isEmpty()) {
-                waitForNextTask();
+                waitForTasks();
             } else {
                 processNextTask();
             }
         }
     }
 
-    private void processNextTask() {
-        Map.Entry<TimeAndOrderKey, Runnable> firstEntry = waitingRoom.pollFirstEntry();
-        long timeToNextEvent = firstEntry.getKey().startTime - System.currentTimeMillis();
-        if (timeToNextEvent <= 0) {
-            toExecuteQueue(firstEntry.getValue());
-        } else {
-            try {
-                sleep(timeToNextEvent);
-            } catch (InterruptedException e) {
-                logger.info("Woke up - new first entry");
-            }
-        }
-    }
-
-    private void waitForNextTask() {
+    private void waitForTasks() {
         try {
-            synchronized (waitingRoom) {
-                waitingRoom.wait();
+            logger.info("No tasks, waiting");
+            synchronized (running) {
+                running.wait();
             }
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
     }
 
+    private void waitForTasks(long delay) {
+        try {
+            logger.info(String.format("Waiting for next for %d ms", delay));
+            NotifyThread z = new NotifyThread(delay);
+            synchronized (running) {
+                z.start();
+                running.wait();
+            }
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+
+    private void wakeUp() {
+        synchronized (running) {
+            running.notify();
+        }
+    }
+
+    private void processNextTask() {
+        long timeToNextEvent = waitingRoom.firstKey().startTime - System.currentTimeMillis();
+        if (timeToNextEvent > 0) {
+            waitForTasks(timeToNextEvent);
+        } else {
+            toExecuteQueue(waitingRoom.pollFirstEntry().getValue()); //it's ok if it's another
+        }
+    }
+
     @Override
     public Future<T> apply(DateTime dateTime, Callable<T> callable) {
-        if (executeQueue.size() > threadPool.size())
-            logger.warn("Overload detected");
-        FutureTask<T> result = new FutureTask<>(callable);
-        accept(dateTime.getMillis(), result);
-        return result;
+        FutureTask<T> future = new FutureTask<>(callable);
+        accept(dateTime.getMillis(), future);
+        return future;
     }
 
     private void accept(long time, Runnable runnable) {
@@ -92,12 +103,8 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
 
     private void toWaitingRoom(long time, Runnable runnable) {
         waitingRoom.put(new TimeAndOrderKey(time), runnable);
-        if (time < waitingRoom.firstKey().startTime) {
-            interrupt();
-        }
-        synchronized (waitingRoom) {
-            waitingRoom.notify();
-        }
+        wakeUp();
+        logger.info(String.format("Accepted task scheduled at %d", time));
     }
 
     private void toExecuteQueue(Runnable runnable) {
@@ -118,6 +125,11 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
         super.finalize();
     }
 
+    public void safeStop() {
+        running.set(false);
+        wakeUp();
+    }
+
     private class TimeAndOrderKey implements Comparable<TimeAndOrderKey> {
 
         private final long startTime;
@@ -130,11 +142,34 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
 
         @Override
         public int compareTo(TimeAndOrderKey o) {
-            long diff = startTime - o.startTime;
+            long diff = o.startTime - startTime;
             if (diff != 0)
                 return Long.signum(diff);
             else
                 return Long.signum(order - o.order);
+        }
+
+    }
+
+    private class NotifyThread extends Thread {
+
+        private final long delay;
+
+        private NotifyThread(long delay) {
+            this.delay = delay;
+        }
+
+        @Override
+        public void run() {
+            try {
+                sleep(delay);
+//                wakeUp();
+                synchronized (running) {
+                    running.notify();
+                }
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
         }
 
     }
