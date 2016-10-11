@@ -25,9 +25,10 @@ public class RunnableExecutorTest {
     public void testWakeUp() throws Exception {
         TaskExecutor<Double> taskExecutor = new TaskExecutor<>();
         taskExecutor.start();
-        DateTime future1 = new DateTime(System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(60));
+        DateTime future1 = new DateTime(System.currentTimeMillis() + 40_000);
+        DateTime future2 = new DateTime(System.currentTimeMillis() + 20_000);
         Future<Double> res1 = taskExecutor.apply(future1, new SlowCallable(1));
-        DateTime future2 = new DateTime(System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(10));
+        Thread.sleep(10_000);
         Future<Double> res2 = taskExecutor.apply(future2, new SlowCallable(2));
         System.out.println(res2.get());
         System.out.println(res1.get());

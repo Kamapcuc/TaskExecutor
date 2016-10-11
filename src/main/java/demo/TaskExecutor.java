@@ -3,7 +3,10 @@ package demo;
 import org.apache.log4j.Logger;
 import org.joda.time.DateTime;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Queue;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -35,21 +38,26 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
     }
 
     @Override
-    @SuppressWarnings("InfiniteLoopStatement")
     public void run() {
         while (running.get()) {
             if (waitingRoom.isEmpty()) {
-                waitForTasks();
+                emptyWait();
             } else {
                 processNextTask();
             }
         }
     }
 
-    private void waitForTasks() {
+    private void emptyWait() {
+        logger.info("No tasks, waiting");
+        waitForTasks(null);
+    }
+
+    private void waitForTasks(NotifyThread wakeUpThread) {
         try {
-            logger.info("No tasks, waiting");
             synchronized (running) {
+                if (wakeUpThread != null)
+                    wakeUpThread.start();
                 running.wait();
             }
         } catch (InterruptedException e) {
@@ -58,18 +66,10 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
     }
 
     private void waitForTasks(long delay) {
-        try {
-            logger.info(String.format("Waiting for next for %d ms", delay));
-            NotifyThread z = new NotifyThread(delay);
-            synchronized (running) {
-                z.start();
-                running.wait();
-            }
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
+        logger.info(String.format("Waiting %d ms for next task", delay));
+        NotifyThread notifyThread = new NotifyThread(delay);
+        waitForTasks(notifyThread);
     }
-
 
     private void wakeUp() {
         synchronized (running) {
@@ -142,7 +142,7 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
 
         @Override
         public int compareTo(TimeAndOrderKey o) {
-            long diff = o.startTime - startTime;
+            long diff = startTime - o.startTime;
             if (diff != 0)
                 return Long.signum(diff);
             else
@@ -163,10 +163,8 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
         public void run() {
             try {
                 sleep(delay);
-//                wakeUp();
-                synchronized (running) {
-                    running.notify();
-                }
+                logger.info(String.format("%d ms delay thread waked up", delay));
+                wakeUp();
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             }
