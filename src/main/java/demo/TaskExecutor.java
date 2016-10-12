@@ -8,7 +8,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Queue;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
@@ -27,7 +26,7 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
     private Collection<Thread> constructThreadPool() {
         Collection<Thread> threadPool = new ArrayList<>();
         for (int i = 0; i < THREAD_POOL_SIZE; i++)
-            threadPool.add(new RunnableExecutor("executor-" + i, this));
+            threadPool.add(new RunnableExecutor(i, this));
         return Collections.unmodifiableCollection(threadPool);
     }
 
@@ -65,23 +64,26 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
                 if (wakeUpThread != null)
                     wakeUpThread.start();
                 monitor.wait();
+                logger.info(String.format("Waked up at %d", System.currentTimeMillis()));
             }
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
     }
 
-    private void waitForTasks(long delay) {
+    private void delayTask(long delay) {
+        logger.info(String.format("Waiting %d ms for next task", delay));
         nextScheduledTime = System.currentTimeMillis() + delay;
-        logger.info(String.format("Waiting %d ms for next task at %d", delay, nextScheduledTime));
         NotifyThread notifyThread = new NotifyThread(delay);
         wait(notifyThread);
+        if (System.currentTimeMillis() < nextScheduledTime)
+            notifyThread.interrupt();
     }
 
     private void processNextTask() {
         long timeToNextEvent = waitingRoom.firstKey().getStartTime() - System.currentTimeMillis();
         if (timeToNextEvent > 0) {
-            waitForTasks(timeToNextEvent);
+            delayTask(timeToNextEvent);
         } else {
             toExecuteQueue(waitingRoom.pollFirstEntry().getValue()); //it's ok if it's another
         }
@@ -104,16 +106,16 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
 
     private void toWaitingRoom(long time, Runnable runnable) {
         waitingRoom.put(new TimeAndOrderKey(time), runnable);
-        if (nextScheduledTime > time)
+        if (time < nextScheduledTime)
             wakeUp();
-        logger.info(String.format("Accepted task scheduled at %d", time));
+        logger.info(String.format("Accepted task scheduled to %d", time));
     }
 
     private void toExecuteQueue(Runnable runnable) {
+        if (executeQueue.size() > threadPool.size())
+            logger.warn("Overload detected");
         executeQueue.offer(runnable);
-        synchronized (this) {
-            notifyAll();
-        }
+        notifyToThreadPool();
     }
 
     @Override
@@ -121,13 +123,20 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
         return executeQueue.poll();
     }
 
-    @Override
-    protected void finalize() throws Throwable {
-        threadPool.forEach(Thread::interrupt);
-        super.finalize();
+    private void notifyToThreadPool() {
+        synchronized (this) {
+            notifyAll();
+        }
     }
 
+//    @Override
+//    protected void finalize() throws Throwable {
+//        threadPool.forEach(Thread::interrupt);
+//        super.finalize();
+//    }
+
     public void safeStop() {
+        logger.info("Stopping");
         running = false;
         wakeUp();
     }
@@ -144,10 +153,10 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
         public void run() {
             try {
                 sleep(delay);
-                logger.info(String.format("%d ms delay thread waked up", delay));
+                logger.info(String.format("Notify thread stops sleeping %d ms delay", delay));
                 wakeUp();
             } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+                logger.info(String.format("Notify thread for %d ms delay was interrupted", delay));
             }
         }
 

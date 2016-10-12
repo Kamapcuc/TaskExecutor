@@ -6,8 +6,8 @@ public class RunnableExecutor extends Thread {
 
     private final Supplier<Runnable> supplier;
 
-    public RunnableExecutor(String name, Supplier<Runnable> runnableSupplier) {
-        super(name);
+    public RunnableExecutor(int num, Supplier<Runnable> runnableSupplier) {
+        super("Executor-" + num);
         setDaemon(true);
         this.supplier = runnableSupplier;
     }
