@@ -2,7 +2,7 @@ package demo;
 
 import java.util.function.Supplier;
 
-public class RunnableExecutor extends Thread {
+class RunnableExecutor extends Thread {
 
     private final Supplier<Runnable> supplier;
 

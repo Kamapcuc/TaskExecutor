@@ -14,7 +14,7 @@ import java.util.function.Supplier;
 public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Callable<T>, Future<T>>, Supplier<Runnable> {
 
     private final static Logger logger = Logger.getLogger(TaskExecutor.class);
-    private final static byte THREAD_POOL_SIZE = 3;
+    private final static byte THREAD_POOL_SIZE = 4;
 
     private final ConcurrentNavigableMap<TimeAndOrderKey, Runnable> waitingRoom = new ConcurrentSkipListMap<>();
     private final Queue<Runnable> executeQueue = new ConcurrentLinkedQueue<>();
@@ -114,6 +114,7 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
     private void toExecuteQueue(Runnable runnable) {
         if (executeQueue.size() > threadPool.size())
             logger.warn("Overload detected");
+        logger.info("Added task for queue");
         executeQueue.offer(runnable);
         notifyToThreadPool();
     }
@@ -128,12 +129,6 @@ public class TaskExecutor<T> extends Thread implements BiFunction<DateTime, Call
             notifyAll();
         }
     }
-
-//    @Override
-//    protected void finalize() throws Throwable {
-//        threadPool.forEach(Thread::interrupt);
-//        super.finalize();
-//    }
 
     public void safeStop() {
         logger.info("Stopping");
